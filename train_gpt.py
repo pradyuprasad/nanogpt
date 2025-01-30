@@ -1,11 +1,12 @@
-import os
-from typing import List, Tuple
-import requests
+from typing import Tuple
 import torch
+from generate import generate_text
 from model import Config, GPT
 import torch.nn.functional as F
 import einops
 import warnings
+
+from utils import encode, load_text
 warnings.filterwarnings("ignore", message="MPS: nonzero op is supported natively starting from macOS 14.0")
 
 def set_seed(seed: int = 42) -> None:
@@ -18,16 +19,6 @@ def set_seed(seed: int = 42) -> None:
 
 set_seed()
 
-def load_text() -> str:
-    if not os.path.isfile('input.txt'):
-        response = requests.get('https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt')
-        with open('input.txt', 'w') as f:
-            f.write(response.text)
-
-    with open('input.txt', 'r', encoding='utf-8') as f:
-        text = f.read()
-
-        return text
 
 
 
@@ -35,6 +26,7 @@ if not torch.backends.mps.is_available():
     if not torch.backends.mps.is_built():
         print("MPS not available because the current PyTorch install was not "
               "built with MPS enabled.")
+        device = torch.device('cpu')
     else:
         print("MPS not available because the current MacOS version is not 12.3+ "
               "and/or you do not have an MPS-enabled device on this machine.")
@@ -51,11 +43,6 @@ itos = {i:ch for i, ch in enumerate(chars)}
 
 
 
-def encode(s:str) -> List[int]:
-    return [stoi[c] for c in s]
-
-def decode(nums:List[int]) -> str:
-    return ''.join(itos[i] for i in nums)
 
 tokens = torch.tensor(encode(text), device=device)
 train_num = round(0.9*len(tokens))
@@ -99,7 +86,11 @@ def training_loop():
        logits = model(indices)
        reshaped_logits = einops.rearrange(logits, 'b t c -> (b t) c')
        reshaped_targets = einops.rearrange(targets, 'b t -> (b t)')
-       loss = F.cross_entropy(reshaped_logits, reshaped_targets)
+       smoothing = 0.1
+       n_classes = reshaped_logits.size(-1)  # Use reshaped_logits instead of logits
+       targets_one_hot = F.one_hot(reshaped_targets, n_classes)  # Use reshaped_targets
+       targets_smooth = (1 - smoothing) * targets_one_hot + smoothing / n_classes
+       loss = -(targets_smooth * F.log_softmax(reshaped_logits, dim=-1)).sum(dim=-1).mean()
        loss.backward()
        optimizer.step()
 
@@ -112,4 +103,12 @@ def training_loop():
                best_val_loss = val_loss
                torch.save(model.state_dict(), 'best_model.pt')
 
-training_loop()
+           with torch.no_grad():
+               prompt = "First Citizen:\n"
+               print("\nSample text:")
+               print((generate_text(model,prompt=prompt,max_tokens=10,temperature=0.8,device=device)))
+               model.train()
+
+if __name__ == "__main__":
+    training_loop()
+

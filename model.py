@@ -14,7 +14,7 @@ class Config:
     num_heads = 6
     head_size = 64
     num_layers = 6
-    dropout = 0.2
+    dropout = 0.5
 
 
 def assert_shapes_BTC(x:torch.Tensor, config: Config) -> None:
@@ -72,11 +72,13 @@ class MLP(nn.Module):
         self.linear1 = nn.Linear(config.embedding_dim, 4*config.embedding_dim)
         self.relu = nn.ReLU()
         self.linear2 = nn.Linear(4*config.embedding_dim, config.embedding_dim)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         assert_shapes_BTC(x, self.config)
         x = self.linear1(x)
         x = self.relu(x)
+        x = self.dropout(x)
         x = self.linear2(x)
         return x
 
@@ -89,11 +91,12 @@ class CombinedBlock(nn.Module):
         self.attention = MultiHeadAttentionBlock(config)
         self.ln2 = nn.LayerNorm(config.embedding_dim)
         self.mlp = MLP(config)
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         assert_shapes_BTC(x, self.config)
-        x = x + self.attention(self.ln1(x))
-        x = x + self.mlp(self.ln2(x))
+        x = x + self.dropout(self.attention(self.ln1(x)))
+        x = x + self.dropout(self.mlp(self.ln2(x)))
         return x
 
 
@@ -111,7 +114,7 @@ class GPT(nn.Module):
 
     def forward(self, x:torch.Tensor) -> torch.Tensor:
        assert len(x.shape) == 2, f"Expected shape of dimension 2 but got {x.shape}"
-       assert x.shape[1] == self.config.context_length
+       assert x.shape[1] <= self.config.context_length, f"Input sequence length {x.shape[1]} exceeds maximum context length {self.config.context_length}"
        B, T = x.shape
        embedding = self.embedding_table(x)
        positional_embedding = self.positional_embedding(torch.arange(T, device=x.device))
